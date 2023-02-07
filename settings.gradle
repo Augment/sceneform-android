@@ -1,6 +1,6 @@
-include ':core', ':ux', ':sceneform',
+include ':core' //, ':ux', ':sceneform'
         // Samples
-        ':sample-3d-model-viewer',
+        /*':sample-3d-model-viewer',
         ':sample-ar-model-viewer',
         ':sample-ar-model-viewer-java',
         ':sample-augmented-faces',
@@ -8,10 +8,10 @@ include ':core', ':ux', ':sceneform',
         ':sample-depth',
         ':sample-environment-lights',
         ':sample-image-texture',
-        ':sample-video-texture'
+        ':sample-video-texture'*/
 
 // Dirs
-project(':sample-3d-model-viewer').projectDir = new File('samples/3d-model-viewer')
+/*project(':sample-3d-model-viewer').projectDir = new File('samples/3d-model-viewer')
 project(':sample-ar-model-viewer').projectDir = new File('samples/ar-model-viewer')
 project(':sample-ar-model-viewer-java').projectDir = new File('samples/ar-model-viewer-java')
 project(':sample-augmented-faces').projectDir = new File('samples/augmented-faces')
@@ -19,4 +19,4 @@ project(':sample-augmented-images').projectDir = new File('samples/augmented-ima
 project(':sample-depth').projectDir = new File(rootDir, 'samples/depth')
 project(':sample-environment-lights').projectDir = new File(rootDir, 'samples/environment-lights')
 project(':sample-image-texture').projectDir = new File('samples/image-texture')
-project(':sample-video-texture').projectDir = new File('samples/video-texture')
+project(':sample-video-texture').projectDir = new File('samples/video-texture')*/
