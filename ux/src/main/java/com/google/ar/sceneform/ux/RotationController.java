@@ -15,6 +15,11 @@
  */
 package com.google.ar.sceneform.ux;
 
+import android.gesture.Gesture;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
 import com.google.ar.sceneform.math.Quaternion;
 import com.google.ar.sceneform.math.Vector3;
 
@@ -22,38 +27,89 @@ import com.google.ar.sceneform.math.Vector3;
  * Manipulates the rotation of a {@link BaseTransformableNode} using a {@link
  * TwistGestureRecognizer}.
  */
-public class RotationController extends BaseTransformationController<TwistGesture> {
+public class RotationController extends TransformationController<TwistGesture> {
 
-  // Rate that the node rotates in degrees per degree of twisting.
-  private float rotationRateDegrees = 2.5f;
+  public class Settings {
+    // Rate that the node rotates in degrees per degree of twisting.
+    float rotationRateDegrees = 2.5f;
+
+    void from(Settings other) {
+      this.rotationRateDegrees = other.rotationRateDegrees;
+    }
+  }
+
+  public Settings settings = new Settings();
+
+  @Nullable
+  private InteractionListener listener = null;
+  @Nullable
+  private BaseSurroundingsListener surroundingsListener = null;
 
   public RotationController(
-      BaseTransformableNode transformableNode, TwistGestureRecognizer gestureRecognizer) {
+      BaseTransformableNode transformableNode, BaseGestureRecognizer<TwistGesture> gestureRecognizer) {
     super(transformableNode, gestureRecognizer);
   }
 
-  public void setRotationRateDegrees(float rotationRateDegrees) {
-    this.rotationRateDegrees = rotationRateDegrees;
+  // ---------------------------------------------------------------------------------------
+  // Implementation of interface TransformationController
+  // ---------------------------------------------------------------------------------------
+
+  @Override
+  public TransformationController<TwistGesture> copyFor(@NonNull BaseTransformableNode transformableNode) {
+    return new RotationController(transformableNode, getGestureRecognizer());
   }
 
-  public float getRotationRateDegrees() {
-    return rotationRateDegrees;
+  // ---------------------------------------------------------------------------------------
+  // Implementation of interface InteractionController
+  // ---------------------------------------------------------------------------------------
+
+  @Override
+  public void setListener(@Nullable InteractionListener listener) {
+    this.listener = listener;
+  }
+
+  @Override @Nullable
+  public InteractionListener getListener() {
+    return listener;
   }
 
   @Override
+  public void setSurroundingsListener(@Nullable BaseSurroundingsListener listener) { this.surroundingsListener = listener; }
+
+  @Override @Nullable
+  public BaseSurroundingsListener getSurroundingsListener() { return surroundingsListener; }
+
+  // ---------------------------------------------------------------------------------------
+  // Other
+  // ---------------------------------------------------------------------------------------
+
+  @Override
   public boolean canStartTransformation(TwistGesture gesture) {
-    return getTransformableNode().isSelected();
+    boolean selected = getTransformableNode().isSelected();
+    if (selected && null != listener) {
+      listener.onMovementStart(getTransformableNode());
+    }
+    return selected;
   }
 
   @Override
   public void onContinueTransformation(TwistGesture gesture) {
-    float rotationAmount = -gesture.getDeltaRotationDegrees() * rotationRateDegrees;
+    float rotationAmount = -gesture.getDeltaRotationDegrees() * settings.rotationRateDegrees;
     Quaternion rotationDelta = new Quaternion(Vector3.up(), rotationAmount);
     Quaternion localrotation = getTransformableNode().getLocalRotation();
     localrotation = Quaternion.multiply(localrotation, rotationDelta);
-    getTransformableNode().setLocalRotation(localrotation);
+    BaseTransformableNode baseTransformableNode = getTransformableNode();
+    baseTransformableNode.setLocalRotation(localrotation);
+
+    if (null != listener) {
+      listener.onMovementStart(baseTransformableNode);
+    }
   }
 
   @Override
-  public void onEndTransformation(TwistGesture gesture) {}
+  public void onEndTransformation(TwistGesture gesture) {
+    if (null != listener) {
+      listener.onMovementEnd(getTransformableNode());
+    }
+  }
 }

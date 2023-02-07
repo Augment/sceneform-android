@@ -15,97 +15,149 @@
  */
 package com.google.ar.sceneform.ux;
 
+import android.gesture.Gesture;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
 import com.google.ar.sceneform.FrameTime;
 import com.google.ar.sceneform.Node;
 import com.google.ar.sceneform.math.MathHelper;
 import com.google.ar.sceneform.math.Vector3;
+
+import static java.lang.StrictMath.abs;
+import static java.lang.StrictMath.max;
 
 /**
  * Manipulates the Scale of a {@link BaseTransformableNode} using a Pinch {@link
  * PinchGestureRecognizer}. Applies a tunable elastic bounce-back when scaling the {@link
  * BaseTransformableNode} beyond the min/max scale.
  */
-public class ScaleController extends BaseTransformationController<PinchGesture> {
+public class ScaleController extends TransformationController<PinchGesture> {
+
+  public class Settings {
+
+    public float minScale = DEFAULT_MIN_SCALE;
+    public float maxScale = DEFAULT_MAX_SCALE;
+    public float sensitivity = DEFAULT_SENSITIVITY;
+    public float elasticity = DEFAULT_ELASTICITY;
+
+    void from(Settings other) {
+      minScale = other.minScale;
+      maxScale = other.maxScale;
+      sensitivity = other.sensitivity;
+      elasticity = other.elasticity;
+    }
+
+  };
+
+  public Settings settings = new Settings();
+
   public static final float DEFAULT_MIN_SCALE = 0.75f;
   public static final float DEFAULT_MAX_SCALE = 1.75f;
   public static final float DEFAULT_SENSITIVITY = 0.75f;
   public static final float DEFAULT_ELASTICITY = 0.15f;
 
-  private float minScale = DEFAULT_MIN_SCALE;
-  private float maxScale = DEFAULT_MAX_SCALE;
-  private float sensitivity = DEFAULT_SENSITIVITY;
-  private float elasticity = DEFAULT_ELASTICITY;
-
-  private float currentScaleRatio;
+  private float currentScaleRatio = 0f;
 
   private static final float ELASTIC_RATIO_LIMIT = 0.8f;
   private static final float LERP_SPEED = 8.0f;
 
+  @Nullable
+  private InteractionListener listener = null;
+  @Nullable
+  private BaseSurroundingsListener surroundingsListener = null;
+
+  private boolean canUpdate = false;
+
   public ScaleController(
-      BaseTransformableNode transformableNode, PinchGestureRecognizer gestureRecognizer) {
+      BaseTransformableNode transformableNode, BaseGestureRecognizer<PinchGesture> gestureRecognizer) {
     super(transformableNode, gestureRecognizer);
   }
 
-  public void setMinScale(float minScale) {
-    this.minScale = minScale;
+  // ---------------------------------------------------------------------------------------
+  // Implementation of interface TransformationController
+  // ---------------------------------------------------------------------------------------
+
+  @Override
+  public TransformationController<PinchGesture> copyFor(@NonNull BaseTransformableNode transformableNode) {
+    return new ScaleController(transformableNode, getGestureRecognizer());
   }
 
-  public float getMinScale() {
-    return minScale;
+  // ---------------------------------------------------------------------------------------
+  // Implementation of interface InteractionController
+  // ---------------------------------------------------------------------------------------
+
+  @Override
+  public void setListener(@Nullable InteractionListener listener) {
+    this.listener = listener;
   }
 
-  public void setMaxScale(float maxScale) {
-    this.maxScale = maxScale;
+  @Override @Nullable
+  public InteractionListener getListener() {
+    return listener;
   }
 
-  public float getMaxScale() {
-    return maxScale;
-  }
+  @Override
+  public void setSurroundingsListener(@Nullable BaseSurroundingsListener listener) { this.surroundingsListener = listener; }
 
-  public void setSensitivity(float sensitivity) {
-    this.sensitivity = sensitivity;
-  }
+  @Override @Nullable
+  public BaseSurroundingsListener getSurroundingsListener() { return surroundingsListener; }
 
-  public float getSensitivity() {
-    return sensitivity;
-  }
+    // ---------------------------------------------------------------------------------------
+  // Other
+  // ---------------------------------------------------------------------------------------
 
-  public void setElasticity(float elasticity) {
-    this.elasticity = elasticity;
-  }
-
-  public float getElasticity() {
-    return elasticity;
+  public void refreshScaleRatio() {
+    Vector3 scale = getTransformableNode().getLocalScale();
+    currentScaleRatio = (scale.x - settings.minScale) / getScaleDelta();
   }
 
   @Override
   public void onActivated(Node node) {
     super.onActivated(node);
-    Vector3 scale = getTransformableNode().getLocalScale();
-    currentScaleRatio = (scale.x - minScale) / getScaleDelta();
+    refreshScaleRatio();
   }
 
   @Override
   public void onUpdated(Node node, FrameTime frameTime) {
-    if (isTransforming() || !isEnabled()) {
+    if (isTransforming() || !canUpdate || !isEnabled()) {
       return;
     }
 
     float t = MathHelper.clamp(frameTime.getDeltaSeconds() * LERP_SPEED, 0, 1);
     currentScaleRatio = MathHelper.lerp(currentScaleRatio, getClampedScaleRatio(), t);
     float finalScaleValue = getFinalScale();
+
+    BaseTransformableNode baseTransformableNode = getTransformableNode();
+
+    if (getElasticDelta() == 0f && almostEqual(baseTransformableNode.getLocalScale().x, finalScaleValue, 0.01f)) {
+      canUpdate = false;
+      if (null != listener) {
+        listener.onMovementEnd(baseTransformableNode);
+      }
+    }
+
     Vector3 finalScale = new Vector3(finalScaleValue, finalScaleValue, finalScaleValue);
-    getTransformableNode().setLocalScale(finalScale);
+    baseTransformableNode.setLocalScale(finalScale);
   }
 
   @Override
   public boolean canStartTransformation(PinchGesture gesture) {
-    return getTransformableNode().isSelected();
+    BaseTransformableNode baseTransformableNode = getTransformableNode();
+    canUpdate = baseTransformableNode.isSelected();
+    if (canUpdate) {
+      if (null != listener) {
+        listener.onMovementStart(baseTransformableNode);
+      }
+    }
+
+    return canUpdate;
   }
 
   @Override
   public void onContinueTransformation(PinchGesture gesture) {
-    currentScaleRatio += gesture.gapDeltaInches() * sensitivity;
+    currentScaleRatio += gesture.gapDeltaInches() * settings.sensitivity;
 
     float finalScaleValue = getFinalScale();
     Vector3 finalScale = new Vector3(finalScaleValue, finalScaleValue, finalScaleValue);
@@ -115,13 +167,21 @@ public class ScaleController extends BaseTransformationController<PinchGesture> 
         || currentScaleRatio > (1.0f + ELASTIC_RATIO_LIMIT)) {
       gesture.cancel();
     }
+
+    if (null != listener) {
+      listener.onMovementUpdate(getTransformableNode());
+    }
   }
 
   @Override
-  public void onEndTransformation(PinchGesture gesture) {}
+    public void onEndTransformation(PinchGesture gesture) {
+    if (listener != null) {
+      listener.onMovementEnd(getTransformableNode());
+    }
+  }
 
   private float getScaleDelta() {
-    float scaleDelta = maxScale - minScale;
+    float scaleDelta = settings.maxScale - settings.minScale;
 
     if (scaleDelta <= 0.0f) {
       throw new IllegalStateException("maxScale must be greater than minScale.");
@@ -136,7 +196,7 @@ public class ScaleController extends BaseTransformationController<PinchGesture> 
 
   private float getFinalScale() {
     float elasticScaleRatio = getClampedScaleRatio() + getElasticDelta();
-    float elasticScale = minScale + elasticScaleRatio * getScaleDelta();
+    float elasticScale = settings.minScale + elasticScaleRatio * getScaleDelta();
     return elasticScale;
   }
 
@@ -150,6 +210,10 @@ public class ScaleController extends BaseTransformationController<PinchGesture> 
       return 0.0f;
     }
 
-    return (1.0f - (1.0f / ((Math.abs(overRatio) * elasticity) + 1.0f))) * Math.signum(overRatio);
+    return (1.0f - (1.0f / ((Math.abs(overRatio) * settings.elasticity) + 1.0f))) * Math.signum(overRatio);
+  }
+
+  private boolean almostEqual(Float value1, Float value2, Float equalityRatio) {
+    return (abs(value1) < 1e-4 && abs(value2) < 1e-4) || abs(value1-value2) / max(abs(value1), abs(value2)) < equalityRatio;
   }
 }

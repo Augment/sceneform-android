@@ -75,6 +75,7 @@ public abstract class BaseArFragment extends Fragment
     private boolean sessionInitializationFailed = false;
     private ArSceneView arSceneView;
     private InstructionsController instructionsController;
+    private PlaneDiscoveryController planeDiscoveryController;
     private TransformationSystem transformationSystem;
     private GestureDetector gestureDetector;
     private FrameLayout frameLayout;
@@ -85,6 +86,8 @@ public abstract class BaseArFragment extends Fragment
     private final OnWindowFocusChangeListener onFocusListener =
             (hasFocus -> onWindowFocusChanged(hasFocus));
     private boolean isAugmentedImageDatabaseEnabled = true;
+    @Nullable
+    private OnSessionInitializationListener onSessionInitializationListener;
     @Nullable
     private OnSessionConfigurationListener onSessionConfigurationListener;
     @Nullable
@@ -121,11 +124,29 @@ public abstract class BaseArFragment extends Fragment
     }
 
     /**
+     * Gets the plane discovery controller, which displays instructions for how to scan for planes.
+     */
+    public PlaneDiscoveryController getPlaneDiscoveryController() {
+        return planeDiscoveryController;
+    }
+
+    /**
      * Gets the transformation system, which is used by {@link TransformableNode} for detecting
      * gestures and coordinating which node is selected.
      */
     public TransformationSystem getTransformationSystem() {
         return transformationSystem;
+    }
+
+    /**
+     * Registers a callback to be invoked when the ARCore Session is initialized. The callback will
+     * only be invoked once after the Session is initialized and before it is resumed.
+     *
+     * @param onSessionInitializationListener the {@link OnSessionInitializationListener} to attach.
+     */
+    public void setOnSessionInitializationListener(
+        @Nullable OnSessionInitializationListener onSessionInitializationListener) {
+        this.onSessionInitializationListener = onSessionInitializationListener;
     }
 
     /**
@@ -183,12 +204,19 @@ public abstract class BaseArFragment extends Fragment
             LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         frameLayout = (FrameLayout) inflater.inflate(R.layout.sceneform_ux_fragment_layout
                 , container, false);
-        arSceneView = frameLayout.findViewById(R.id.sceneform_ar_scene_view);
+        arSceneView = (ArSceneView) frameLayout.findViewById(R.id.sceneform_ar_scene_view);
         arSceneView.setOnSessionConfigChangeListener(this::onSessionConfigChanged);
 
         // Setup the instructions view.
         instructionsController = new InstructionsController(inflater, frameLayout);
         instructionsController.setEnabled(InstructionsController.TYPE_PLANE_DISCOVERY, true);
+        
+        // Note: check if there is a conflict with InstructionsController
+        View instructionsView = loadPlaneDiscoveryView(inflater, container);
+        if (instructionsView != null) {
+        frameLayout.addView(instructionsView);
+        }
+        planeDiscoveryController = new PlaneDiscoveryController(instructionsView);
 
         if (Build.VERSION.SDK_INT < VERSION_CODES.N) {
             // Enforce API level 24
@@ -242,12 +270,64 @@ public abstract class BaseArFragment extends Fragment
     }
 
     @Override
+    public void onPause() {
+        super.onPause();
+        pause();
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         if (isArRequired() && arSceneView.getSession() == null) {
             initializeSession();
         }
         resume();
+    }
+
+    @Override
+    public void onDestroy() {
+        destroy();
+        super.onDestroy();
+    }
+
+    private void start() {
+        if (isStarted) {
+            return;
+        }
+
+        if (getActivity() != null) {
+            isStarted = true;
+            try {
+                arSceneView.resume();
+            } catch (CameraNotAvailableException ex) {
+                sessionInitializationFailed = true;
+            }
+            if (!sessionInitializationFailed) {
+                planeDiscoveryController.show();
+            }
+        }
+    }
+
+    private void stop() {
+        if (!isStarted) {
+        return;
+        }
+
+        isStarted = false;
+        planeDiscoveryController.hide();
+        arSceneView.pause();
+    }
+
+    public void pause() {
+        if (!isStarted) {
+            return;
+        }
+
+        isStarted = false;
+        if (getInstructionsController() != null) {
+            getInstructionsController().setVisible(false);
+        }
+        arSceneView.pause();
     }
 
     public void resume() {
@@ -268,30 +348,6 @@ public abstract class BaseArFragment extends Fragment
                 }
             }
         }
-    }
-
-    @Override
-    public void onPause() {
-        super.onPause();
-        pause();
-    }
-
-    public void pause() {
-        if (!isStarted) {
-            return;
-        }
-
-        isStarted = false;
-        if (getInstructionsController() != null) {
-            getInstructionsController().setVisible(false);
-        }
-        arSceneView.pause();
-    }
-
-    @Override
-    public void onDestroy() {
-        destroy();
-        super.onDestroy();
     }
 
     /**
@@ -322,9 +378,10 @@ public abstract class BaseArFragment extends Fragment
      * Manifest.permission.CAMERA, which is needed by ARCore. If no additional permissions are needed,
      * an empty array should be returned.
      */
-    public String[] getAdditionalPermissions() {
+    /* public String[] getAdditionalPermissions() {
         return new String[0];
-    }
+    }*/
+    public abstract String[] getAdditionalPermissions();
 
     /**
      * Starts the process of requesting dangerous permissions. This combines the CAMERA permission
@@ -465,8 +522,9 @@ public abstract class BaseArFragment extends Fragment
                     return;
                 }
 
-                Session session = onCreateSession();
-                Config config = onCreateSessionConfig(session);
+                Session session = createSession();
+
+                Config config = getSessionConfiguration(session);
                 if (this.onSessionConfigurationListener != null) {
                     this.onSessionConfigurationListener.onSessionConfiguration(session, config);
                 }
@@ -474,6 +532,9 @@ public abstract class BaseArFragment extends Fragment
                         && config.getLightEstimationMode() == Config.LightEstimationMode.ENVIRONMENTAL_HDR) {
                     config.setLightEstimationMode(Config.LightEstimationMode.DISABLED);
                 }
+
+                // Force the non-blocking mode for the session.
+                //config.setUpdateMode(Config.UpdateMode.LATEST_CAMERA_IMAGE);
                 session.configure(config);
                 setSession(session);
                 return;
@@ -500,9 +561,16 @@ public abstract class BaseArFragment extends Fragment
      * The {@link Session#configure(Config)} is made after this call.
      * You must override the {@link #onCreateSessionConfig(Session)} to apply configuration.
      */
-    private Session onCreateSession() throws UnavailableSdkTooOldException, UnavailableDeviceNotCompatibleException,
+    private Session createSession() throws UnavailableSdkTooOldException, UnavailableDeviceNotCompatibleException,
             UnavailableArcoreNotInstalledException, UnavailableApkTooOldException {
-        return new Session(requireActivity());
+        Session session = createSessionWithFeatures();
+        if (session == null) {
+            session = new Session(requireActivity());
+        }
+        if (this.onSessionInitializationListener != null) {
+            this.onSessionInitializationListener.onSessionInitialization(session);
+        }
+        return session;
     }
 
     /**
@@ -571,6 +639,18 @@ public abstract class BaseArFragment extends Fragment
         }
     }
 
+    protected Config getSessionConfiguration(Session session) {
+        return onCreateSessionConfig(session);
+    }
+
+    /**
+     * Specifies additional features for creating an ARCore {@link com.google.ar.core.Session}. See
+     * {@link com.google.ar.core.Session.Feature}.
+     */
+
+    protected abstract Set<Session.Feature> getSessionFeatures();
+
+
     /**
      * Creates the transformation system used by this fragment. Can be overridden to create a custom
      * transformation system.
@@ -612,7 +692,7 @@ public abstract class BaseArFragment extends Fragment
     }
 
     protected abstract void onArUnavailableException(UnavailableException sessionException);
-
+ 
     protected void onWindowFocusChanged(boolean hasFocus) {
         FragmentActivity activity = getActivity();
         if (hasFocus && activity != null) {
@@ -659,6 +739,12 @@ public abstract class BaseArFragment extends Fragment
         if (getArSceneView() == null || getArSceneView().getSession() == null || getArSceneView().getArFrame() == null)
             return;
 
+        for (Plane plane : frame.getUpdatedTrackables(Plane.class)) {
+            if (plane.getTrackingState() == TrackingState.TRACKING) {
+                planeDiscoveryController.hide();
+            }
+        }
+
         if (getInstructionsController() != null) {
             // Instructions for the Plane finding mode.
             boolean showPlaneInstructions = !getArSceneView().hasTrackedPlane();
@@ -686,6 +772,13 @@ public abstract class BaseArFragment extends Fragment
         }
     }
 
+    // Load the default view we use for the plane discovery instructions.
+    @Nullable
+
+    private View loadPlaneDiscoveryView(LayoutInflater inflater, @Nullable ViewGroup container) {
+        return inflater.inflate(R.layout.sceneform_plane_discovery_layout, container, false);
+    }
+
     private void onSingleTap(MotionEvent motionEvent) {
         Frame frame = arSceneView.getArFrame();
 
@@ -706,6 +799,20 @@ public abstract class BaseArFragment extends Fragment
                 }
             }
         }
+    }
+
+    /**
+     * Invoked when the ARCore Session is initialized.
+     */
+    public interface OnSessionInitializationListener {
+        /**
+        * The callback will only be invoked once after a Session is initialized and before it is
+        * resumed for the first time.
+        *
+        * @see #setOnSessionInitializationListener(OnTapArPlaneListener)
+        * @param session The ARCore Session.
+        */
+        void onSessionInitialization(Session session);
     }
 
     /**

@@ -19,6 +19,7 @@ import androidx.annotation.Nullable;
 import android.util.DisplayMetrics;
 import android.view.MotionEvent;
 import com.google.ar.sceneform.HitTestResult;
+
 import java.util.ArrayList;
 
 /**
@@ -40,6 +41,8 @@ public class TransformationSystem {
   private SelectionVisualizer selectionVisualizer;
 
   @Nullable private BaseTransformableNode selectedNode;
+
+  @Nullable public SelectionListener selectionListener = null;
 
   @SuppressWarnings("initialization")
   public TransformationSystem(
@@ -142,13 +145,24 @@ public class TransformationSystem {
    * @return true if the node was successfully selected
    */
   public boolean selectNode(@Nullable BaseTransformableNode node) {
+    BaseTransformableNode formerSelectedNode = selectedNode;
+
     if (!deselectNode()) {
       return false;
     }
 
     if (node != null) {
       selectedNode = node;
+
+      if (null!=selectionListener) {
+        selectionListener.onSelect(selectedNode);
+      }
+
       selectionVisualizer.applySelectionVisual(selectedNode);
+    }
+
+    if (formerSelectedNode!=node && null!=selectionListener) {
+      selectionListener.onSelectionChanged(formerSelectedNode, node);
     }
 
     return true;
@@ -177,6 +191,11 @@ public class TransformationSystem {
     }
 
     selectionVisualizer.removeSelectionVisual(selectedNode);
+
+    if (null!=selectionListener) {
+      selectionListener.onDeselect(selectedNode);
+    }
+    
     selectedNode = null;
 
     return true;

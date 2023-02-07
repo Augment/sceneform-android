@@ -15,29 +15,33 @@
  */
 package com.google.ar.sceneform.ux;
 
-import android.net.Uri;
+//import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
-import android.view.MotionEvent;
+//import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Toast;
+import com.google.ar.core.Config;
+import com.google.ar.core.Session;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.google.ar.core.Anchor;
-import com.google.ar.core.HitResult;
-import com.google.ar.core.Plane;
+//import com.google.ar.core.Anchor;
+//import com.google.ar.core.HitResult;
+//import com.google.ar.core.Plane;
 import com.google.ar.core.exceptions.UnavailableApkTooOldException;
 import com.google.ar.core.exceptions.UnavailableArcoreNotInstalledException;
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException;
 import com.google.ar.core.exceptions.UnavailableException;
 import com.google.ar.core.exceptions.UnavailableSdkTooOldException;
-import com.google.ar.sceneform.AnchorNode;
+//import com.google.ar.sceneform.AnchorNode;
 import com.google.ar.sceneform.ArSceneView;
-import com.google.ar.sceneform.rendering.ModelRenderable;
-import com.google.ar.sceneform.rendering.Renderable;
-import com.google.ar.sceneform.rendering.RenderableInstance;
+//import com.google.ar.sceneform.rendering.ModelRenderable;
+//import com.google.ar.sceneform.rendering.Renderable;
+//import com.google.ar.sceneform.rendering.RenderableInstance;
+import java.util.Collections;
+import java.util.Set;
 
 /**
  * Implements AR Required ArFragment. Does not require additional permissions and uses the default
@@ -105,6 +109,11 @@ public class ArFragment extends BaseArFragment {
         }
     }
 
+    @Override
+    protected Set<Session.Feature> getSessionFeatures() {
+        return Collections.emptySet();
+    }
+
     /**
      * Invoked when the ARSceneView is created and added to the fragment.
      * You can use it to configure the ARSceneView and other ArFragment parameters.
@@ -133,9 +142,9 @@ public class ArFragment extends BaseArFragment {
      * @param glbSource Glb file source location can be come from the asset folder ("model.glb")
      *                  or an http source ("http://domain.com/model.glb")
      */
-    public void setOnTapPlaneGlbModel(String glbSource) {
+    /*public void setOnTapPlaneGlbModel(String glbSource) {
         setOnTapPlaneGlbModel(glbSource, null);
-    }
+    }*/
 
     /**
      * Loads a monolithic binary glTF and add it to the fragment when the user tap on a detected
@@ -147,7 +156,7 @@ public class ArFragment extends BaseArFragment {
      * @param glbSource Glb file source location can be come from the asset folder ("model.glb")
      *                  or an http source ("http://domain.com/model.glb")
      */
-    public void setOnTapPlaneGlbModel(String glbSource, @Nullable OnTapModelListener listener) {
+    /*public void setOnTapPlaneGlbModel(String glbSource, @Nullable OnTapModelListener listener) {
         ModelRenderable.builder()
                 .setSource(
                         getContext(),
@@ -193,7 +202,7 @@ public class ArFragment extends BaseArFragment {
                         listener.onModelAdded(renderableInstance);
                     }
                 });
-    }
+    }*/
 
     /**
      * Invoked when an ARCore plane is tapped and model is added or an error occurred during the

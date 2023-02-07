@@ -15,7 +15,9 @@
  */
 package com.google.ar.sceneform.ux;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+
 import com.google.ar.core.Anchor;
 import com.google.ar.core.Camera;
 import com.google.ar.core.Frame;
@@ -34,6 +36,7 @@ import com.google.ar.sceneform.math.MathHelper;
 import com.google.ar.sceneform.math.Quaternion;
 import com.google.ar.sceneform.math.Vector3;
 import com.google.ar.sceneform.utilities.Preconditions;
+
 import java.util.EnumSet;
 import java.util.List;
 
@@ -43,22 +46,65 @@ import java.util.List;
  * when the {@link DragGesture} starts.
  */
 public class TranslationController extends BaseTransformationController<DragGesture> {
-  @Nullable private HitResult lastArHitResult;
-  @Nullable private Vector3 desiredLocalPosition;
-  @Nullable private Quaternion desiredLocalRotation;
+  @Nullable private HitResult lastArHitResult = null;
+  @Nullable private Plane lastArPlane = null;
+  @Nullable private Vector3 desiredLocalPosition = null;
+  @Nullable private Quaternion desiredLocalRotation = null;
+  private final DetectedARPlanes detectedPlanes;
 
   private final Vector3 initialForwardInLocal = new Vector3();
 
+  private boolean canUpdate = false;
+
   private EnumSet<Plane.Type> allowedPlaneTypes = EnumSet.allOf(Plane.Type.class);
+
+  @Nullable
+  private InteractionListener listener = null;
+  @Nullable
+  private BaseSurroundingsListener surroundingsListener = null;
 
   private static final float LERP_SPEED = 12.0f;
   private static final float POSITION_LENGTH_THRESHOLD = 0.01f;
   private static final float ROTATION_DOT_THRESHOLD = 0.99f;
 
   public TranslationController(
-      BaseTransformableNode transformableNode, DragGestureRecognizer gestureRecognizer) {
+      BaseTransformableNode transformableNode, BaseGestureRecognizer<DragGesture> gestureRecognizer, DetectedARPlanes detectedARPlanes) {
     super(transformableNode, gestureRecognizer);
+    this.detectedPlanes = detectedARPlanes;
   }
+
+  // ---------------------------------------------------------------------------------------
+  // Implementation of interface TransformationController
+  // ---------------------------------------------------------------------------------------
+
+  @Override
+  public TransformationController<DragGesture> copyFor(@NonNull BaseTransformableNode transformableNode) {
+    return new TranslationController(transformableNode, getGestureRecognizer(), detectedPlanes);
+  }
+  
+  // ---------------------------------------------------------------------------------------
+  // Implementation of interface InteractionController
+  // ---------------------------------------------------------------------------------------
+
+  @Override
+  public void setListener(@Nullable InteractionListener listener) {
+    this.listener = listener;
+  }
+
+  @Override @Nullable
+  public InteractionListener getListener() {
+    return listener;
+  }
+
+  @Override
+  public void setSurroundingsListener(@Nullable BaseSurroundingsListener listener) { this.surroundingsListener = listener; }
+
+  @Override @Nullable
+  public BaseSurroundingsListener getSurroundingsListener() { return surroundingsListener; }
+
+  // ---------------------------------------------------------------------------------------
+  // Other
+  // ---------------------------------------------------------------------------------------
 
   /** Sets which types of ArCore Planes this TranslationController is allowed to translate on. */
   public void setAllowedPlaneTypes(EnumSet<Plane.Type> allowedPlaneTypes) {
@@ -75,8 +121,10 @@ public class TranslationController extends BaseTransformationController<DragGest
 
   @Override
   public void onUpdated(Node node, FrameTime frameTime) {
-    updatePosition(frameTime);
-    updateRotation(frameTime);
+    if (canUpdate) {
+      updatePosition(frameTime);
+      updateRotation(frameTime);
+    }
   }
 
   @Override
@@ -110,11 +158,16 @@ public class TranslationController extends BaseTransformationController<DragGest
       initialForwardInLocal.set(initialForwardInWorld);
     }
 
+    if (null != listener) {
+      listener.onMovementStart(transformableNode);
+    }
+
     return true;
   }
 
   @Override
   public void onContinueTransformation(DragGesture gesture) {
+    BaseTransformableNode transformableNode = getTransformableNode();
     Scene scene = getTransformableNode().getScene();
     if (scene == null) {
       return;
@@ -130,6 +183,9 @@ public class TranslationController extends BaseTransformationController<DragGest
       return;
     }
 
+    @Nullable Plane lastArPlaneOld = lastArPlane;
+
+    @Nullable Pose intersectionPose = null;
     Vector3 position = gesture.getPosition();
     List<HitResult> hitResultList = frame.hitTest(position.x, position.y);
     for (int i = 0; i < hitResultList.size(); i++) {
@@ -138,43 +194,65 @@ public class TranslationController extends BaseTransformationController<DragGest
       Pose pose = hit.getHitPose();
       if (trackable instanceof Plane) {
         Plane plane = (Plane) trackable;
-        if (plane.isPoseInPolygon(pose) && allowedPlaneTypes.contains(plane.getType())) {
-          desiredLocalPosition = new Vector3(pose.tx(), pose.ty(), pose.tz());
-          desiredLocalRotation = new Quaternion(pose.qx(), pose.qy(), pose.qz(), pose.qw());
-          Node parent = getTransformableNode().getParentNode();
-          if (parent != null && desiredLocalPosition != null && desiredLocalRotation != null) {
-            desiredLocalPosition = parent.worldToLocalPoint(desiredLocalPosition);
-            desiredLocalRotation =
-                Quaternion.multiply(
-                    parent.getWorldRotation().inverted(),
-                    Preconditions.checkNotNull(desiredLocalRotation));
-          }
-
-          desiredLocalRotation =
-              calculateFinalDesiredLocalRotation(Preconditions.checkNotNull(desiredLocalRotation));
+        if (allowedPlaneTypes.contains(plane.getType()) && (detectedPlanes.floorPlanes.isFirstPlane(plane) || plane.isPoseInPolygon(pose))) {
+          intersectionPose = pose;
           lastArHitResult = hit;
+          lastArPlane = plane;
           break;
         }
       }
     }
+
+        if (intersectionPose!=null) {
+      updateDesiredPositionAndRotation(intersectionPose);
+    } else {
+      Plane groundPlane = detectedPlanes.floorPlanes.getFirstPlane();
+      if (groundPlane!=null) {
+        intersectionPose = PlaneIntersection.intersect(groundPlane, scene.getCamera().screenPointToRay(position.x, position.y), true, Float.MAX_VALUE);
+        if (intersectionPose!=null) {
+          updateDesiredPositionAndRotation(intersectionPose);
+          lastArPlane = groundPlane;
+        }
+      }
+    }
+
+    if (!lastArPlane.equals(lastArPlaneOld) && null != surroundingsListener) {
+        surroundingsListener.onPlaneChanged(transformableNode, lastArPlane);
+    }
+
+    if (null != listener) {
+      listener.onMovementUpdate(transformableNode);
+    }
+
+    canUpdate = true;
   }
 
   @Override
   public void onEndTransformation(DragGesture gesture) {
-    HitResult hitResult = lastArHitResult;
-    if (hitResult == null) {
+    canUpdate = false;
+
+    Plane movementPlane = lastArPlane;
+    if (movementPlane == null) {
       return;
     }
 
-    if (hitResult.getTrackable().getTrackingState() == TrackingState.TRACKING) {
+    HitResult hitResult = lastArHitResult;
+
+    if (movementPlane.getTrackingState() == TrackingState.TRACKING) {
+
+      Anchor newAnchor;
+      if (hitResult == null || hitResult.getTrackable() != lastArPlane) {
+        newAnchor = movementPlane.createAnchor(movementPlane.getCenterPose());
+      } else {
+        newAnchor = hitResult.createAnchor();
+      }
+
       AnchorNode anchorNode = getAnchorNodeOrDie();
 
       Anchor oldAnchor = anchorNode.getAnchor();
       if (oldAnchor != null) {
         oldAnchor.detach();
       }
-
-      Anchor newAnchor = hitResult.createAnchor();
 
       Vector3 worldPosition = getTransformableNode().getWorldPosition();
       Quaternion worldRotation = getTransformableNode().getWorldRotation();
@@ -200,8 +278,12 @@ public class TranslationController extends BaseTransformationController<DragGest
       getTransformableNode().setWorldPosition(worldPosition);
     }
 
-    desiredLocalPosition = Vector3.zero();
-    desiredLocalRotation = calculateFinalDesiredLocalRotation(Quaternion.identity());
+    desiredLocalPosition = null;
+    desiredLocalRotation = null;
+
+    if (null != listener) {
+      listener.onMovementEnd(getTransformableNode());
+    }
   }
 
   private AnchorNode getAnchorNodeOrDie() {
@@ -211,6 +293,18 @@ public class TranslationController extends BaseTransformationController<DragGest
     }
 
     return (AnchorNode) parent;
+  }
+
+  private void updateDesiredPositionAndRotation(Pose pose) {
+    desiredLocalPosition = new Vector3(pose.tx(), pose.ty(), pose.tz());
+    desiredLocalRotation = new Quaternion(pose.qx(), pose.qy(), pose.qz(), pose.qw());
+    Node parent = getTransformableNode().getParent();
+    if (parent != null && desiredLocalPosition != null && desiredLocalRotation != null) {
+      desiredLocalPosition = parent.worldToLocalPoint(desiredLocalPosition);
+      desiredLocalRotation = Quaternion.multiply(parent.getWorldRotation().inverted(), Preconditions.checkNotNull(desiredLocalRotation));
+    }
+
+    desiredLocalRotation = calculateFinalDesiredLocalRotation(Preconditions.checkNotNull(desiredLocalRotation));
   }
 
   private void updatePosition(FrameTime frameTime) {
